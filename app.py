@@ -6,7 +6,7 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return jsonify({
-        "message": "Hello from Docker!",
+        "message": "It's workingg! Stage 2 here i come. Lol",
         "status": "running",
         "environment": os.getenv("ENVIRONMENT", "development")
     })
