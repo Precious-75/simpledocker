@@ -1,199 +1,361 @@
 #!/bin/bash
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+# exit codes
+EXIT_SUCCESS=0
+EXIT_GIT_FAILED=10
+EXIT_SSH_FAILED=20
+EXIT_DOCKER_FAILED=30
+EXIT_NGINX_FAILED=40
+EXIT_VALIDATION_FAILED=50
+EXIT_TRANSFER_FAILED=60
 
-echo -e "${GREEN}=== Docker Deployment Script ===${NC}\n"
+# logging setup
+LOG_FILE="deploy_$(date +%Y%m%d_%H%M%S).log"
 
-# Function to validate IP address
-validate_ip() {
-    local ip=$1
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        return 0
-    else
-        return 1
-    fi
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
-# Function to validate port number
-validate_port() {
-    local port=$1
-    if [[ $port =~ ^[0-9]+$ ]] && [ $port -ge 1 ] && [ $port -le 65535 ]; then
-        return 0
-    else
-        return 1
-    fi
+cleanup_on_error() {
+    log "ERROR: Script failed at line $1"
+    log "Deployment failed. Check $LOG_FILE for details"
+    exit 1
 }
 
-# Prompt user for inputs
-echo "Step 1: Repository Information"
-echo "--------------------------------"
-read -p "Enter Git Repository URL: " REPO_URL
-while [ -z "$REPO_URL" ]; do
-    echo -e "${RED}Error: Repository URL cannot be empty${NC}"
-    read -p "Enter Git Repository URL: " REPO_URL
-done
+trap 'cleanup_on_error $LINENO' ERR
+set -e
 
-read -sp "Enter Personal Access Token (PAT): " PAT
-echo
-while [ -z "$PAT" ]; do
-    echo -e "${RED}Error: PAT cannot be empty${NC}"
-    read -sp "Enter Personal Access Token (PAT): " PAT
-    echo
-done
-
-read -p "Enter branch name (default: main): " BRANCH
-BRANCH=${BRANCH:-main}
-
-echo -e "\n${GREEN}Step 2: SSH Connection Details${NC}"
-echo "--------------------------------"
-read -p "Enter SSH username: " SSH_USER
-while [ -z "$SSH_USER" ]; do
-    echo -e "${RED}Error: SSH username cannot be empty${NC}"
-    read -p "Enter SSH username: " SSH_USER
-done
-
-read -p "Enter server IP: " SERVER_IP
-while [ -z "$SERVER_IP" ] || ! validate_ip "$SERVER_IP"; do
-    echo -e "${RED}Error: Invalid IP address format${NC}"
-    read -p "Enter server IP: " SERVER_IP
-done
-
-read -p "Enter SSH key path (e.g., ~/.ssh/id_rsa): " SSH_KEY
-while [ -z "$SSH_KEY" ] || [ ! -f "$SSH_KEY" ]; do
-    if [ -z "$SSH_KEY" ]; then
-        echo -e "${RED}Error: SSH key path cannot be empty${NC}"
-    else
-        echo -e "${RED}Error: SSH key file not found at: $SSH_KEY${NC}"
-    fi
-    read -p "Enter SSH key path: " SSH_KEY
-done
-
-read -p "Enter application port: " APP_PORT
-while [ -z "$APP_PORT" ] || ! validate_port "$APP_PORT"; do
-    echo -e "${RED}Error: Invalid port number (1-65535)${NC}"
-    read -p "Enter application port: " APP_PORT
-done
-
-# Summary of inputs
-echo -e "\n${GREEN}=== Configuration Summary ===${NC}"
-echo "Repository: $REPO_URL"
-echo "Branch: $BRANCH"
-echo "SSH User: $SSH_USER"
-echo "Server IP: $SERVER_IP"
-echo "SSH Key: $SSH_KEY"
-echo "App Port: $APP_PORT"
-echo
-
-read -p "Proceed with deployment? (y/n): " CONFIRM
-if [[ ! $CONFIRM =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}Deployment cancelled${NC}"
-    exit 0
+# cleanup flag
+if [ "$1" = "--cleanup" ]; then
+    log "cleanup mode"
+    
+    read -p "Enter SSH Username: " SSH_USERNAME
+    read -p "Enter Server IP Address: " SERVER_IP
+    read -p "Enter SSH Key Path: " SSH_KEY_PATH
+    
+    log "connecting to server..."
+    
+    ssh -i "$SSH_KEY_PATH" "$SSH_USERNAME@$SERVER_IP" bash << 'ENDSSH'
+        echo "stopping containers..."
+        docker stop myapp 2>/dev/null || true
+        docker rm myapp 2>/dev/null || true
+        docker-compose down 2>/dev/null || true
+        
+        echo "removing images..."
+        docker rmi myapp 2>/dev/null || true
+        
+        # cleanup networks too
+        echo "cleaning networks..."
+        docker network rm myapp_network 2>/dev/null || true
+        
+        echo "removing nginx stuff..."
+        sudo rm -f /etc/nginx/sites-enabled/myapp
+        sudo rm -f /etc/nginx/sites-available/myapp
+        sudo systemctl reload nginx 2>/dev/null || true
+        
+        echo "removing app dir..."
+        rm -rf /home/$USER/app
+        
+        echo "done"
+ENDSSH
+    
+    log "cleanup done"
+    exit $EXIT_SUCCESS
 fi
 
-echo -e "\n${GREEN}All inputs validated successfully!${NC}"
-echo -e "${YELLOW}Ready for Phase 2: Deployment steps...${NC}"
+log "Bash Script"
 
-# TODO: Add deployment logic here in next phases#!/bin/bash
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-echo -e "${GREEN}=== Docker Deployment Script ===${NC}\n"
-
-# Function to validate IP address
-validate_ip() {
-    local ip=$1
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Function to validate port number
-validate_port() {
-    local port=$1
-    if [[ $port =~ ^[0-9]+$ ]] && [ $port -ge 1 ] && [ $port -le 65535 ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Prompt user for inputs
-echo "Step 1: Repository Information"
-echo "--------------------------------"
-read -p "Enter Git Repository URL: " REPO_URL
-while [ -z "$REPO_URL" ]; do
-    echo -e "${RED}Error: Repository URL cannot be empty${NC}"
-    read -p "Enter Git Repository URL: " REPO_URL
-done
-
+read -p "Enter Git Repository URL: " GIT_REPO_URL
 read -sp "Enter Personal Access Token (PAT): " PAT
-echo
-while [ -z "$PAT" ]; do
-    echo -e "${RED}Error: PAT cannot be empty${NC}"
-    read -sp "Enter Personal Access Token (PAT): " PAT
-    echo
-done
+echo ""
+read -p "Enter Branch name (default: main): " BRANCH_NAME
+BRANCH_NAME=${BRANCH_NAME:-main}
 
-read -p "Enter branch name (default: main): " BRANCH
-BRANCH=${BRANCH:-main}
+read -p "Enter SSH Username: " SSH_USERNAME
+read -p "Enter Server IP Address: " SERVER_IP
+read -p "Enter SSH Key Path: " SSH_KEY_PATH
+read -p "Enter Application Port: " APP_PORT
 
-echo -e "\n${GREEN}Step 2: SSH Connection Details${NC}"
-echo "--------------------------------"
-read -p "Enter SSH username: " SSH_USER
-while [ -z "$SSH_USER" ]; do
-    echo -e "${RED}Error: SSH username cannot be empty${NC}"
-    read -p "Enter SSH username: " SSH_USER
-done
+echo ""
+log "config collected, starting deployment"
+echo ""
 
-read -p "Enter server IP: " SERVER_IP
-while [ -z "$SERVER_IP" ] || ! validate_ip "$SERVER_IP"; do
-    echo -e "${RED}Error: Invalid IP address format${NC}"
-    read -p "Enter server IP: " SERVER_IP
-done
+log "cloning repo"
 
-read -p "Enter SSH key path (e.g., ~/.ssh/id_rsa): " SSH_KEY
-while [ -z "$SSH_KEY" ] || [ ! -f "$SSH_KEY" ]; do
-    if [ -z "$SSH_KEY" ]; then
-        echo -e "${RED}Error: SSH key path cannot be empty${NC}"
-    else
-        echo -e "${RED}Error: SSH key file not found at: $SSH_KEY${NC}"
-    fi
-    read -p "Enter SSH key path: " SSH_KEY
-done
+REPO_NAME=$(basename "$GIT_REPO_URL" .git)
 
-read -p "Enter application port: " APP_PORT
-while [ -z "$APP_PORT" ] || ! validate_port "$APP_PORT"; do
-    echo -e "${RED}Error: Invalid port number (1-65535)${NC}"
-    read -p "Enter application port: " APP_PORT
-done
-
-# Summary of inputs
-echo -e "\n${GREEN}=== Configuration Summary ===${NC}"
-echo "Repository: $REPO_URL"
-echo "Branch: $BRANCH"
-echo "SSH User: $SSH_USER"
-echo "Server IP: $SERVER_IP"
-echo "SSH Key: $SSH_KEY"
-echo "App Port: $APP_PORT"
-echo
-
-read -p "Proceed with deployment? (y/n): " CONFIRM
-if [[ ! $CONFIRM =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}Deployment cancelled${NC}"
-    exit 0
+# check if repo already exists
+if [ -d "$REPO_NAME" ]; then
+    log "repo exists, pulling changes"
+    cd "$REPO_NAME" || exit $EXIT_GIT_FAILED
+    git pull origin "$BRANCH_NAME" || exit $EXIT_GIT_FAILED
+else
+    log "cloning..."
+    git clone "https://${PAT}@${GIT_REPO_URL#https://}" || exit $EXIT_GIT_FAILED
+    cd "$REPO_NAME" || exit $EXIT_GIT_FAILED
+    git checkout "$BRANCH_NAME" || exit $EXIT_GIT_FAILED
 fi
 
-echo -e "\n${GREEN}All inputs validated successfully!${NC}"
-echo -e "${YELLOW}Ready for Phase 2: Deployment steps...${NC}"
+log "repo ready"
+echo ""
 
-# TODO: Add deployment logic here in next phases
+
+log "checking for dockerfile"
+
+if [ -f "Dockerfile" ]; then
+    log "found Dockerfile"
+elif [ -f "docker-compose.yml" ]; then
+    log "found docker-compose.yml"
+else
+    log "ERROR: no Dockerfile or docker-compose.yml"
+    exit $EXIT_GIT_FAILED
+fi
+
+echo ""
+
+log "testing ssh"
+
+ssh -i "$SSH_KEY_PATH" -o ConnectTimeout=10 "$SSH_USERNAME@$SERVER_IP" "echo 'SSH connection successful'" || {
+    log "ERROR: ssh failed"
+    exit $EXIT_SSH_FAILED
+}
+
+echo ""
+
+log "setting up remote server"
+
+ssh -i "$SSH_KEY_PATH" "$SSH_USERNAME@$SERVER_IP" bash << 'ENDSSH'
+    echo "updating packages..."
+    sudo apt update -y
+    
+    # install docker if needed
+    echo "checking docker..."
+    if ! command -v docker &> /dev/null; then
+        sudo apt install -y docker.io
+    fi
+    
+    # docker compose
+    echo "checking docker-compose..."
+    if ! command -v docker-compose &> /dev/null; then
+        sudo apt install -y docker-compose
+    fi
+    
+    # nginx
+    echo "checking nginx..."
+    if ! command -v nginx &> /dev/null; then
+        sudo apt install -y nginx
+    fi
+    
+    echo "adding user to docker group"
+    sudo usermod -aG docker $USER
+    
+    # start services
+    echo "starting docker..."
+    sudo systemctl enable docker
+    sudo systemctl start docker
+    
+    echo "starting nginx..."
+    sudo systemctl enable nginx
+    sudo systemctl start nginx
+    
+    # verify everything installed
+    docker --version
+    docker-compose --version
+    nginx -v
+    
+    echo "server ready"
+ENDSSH
+
+echo ""
+
+
+log "deploying app"
+
+REMOTE_DIR="/home/$SSH_USERNAME/app"
+
+ssh -i "$SSH_KEY_PATH" "$SSH_USERNAME@$SERVER_IP" "mkdir -p $REMOTE_DIR"
+
+log "transferring files"
+
+# had to use tar instead of rsync
+tar czf - --exclude='.git' . | ssh -i "$SSH_KEY_PATH" "$SSH_USERNAME@$SERVER_IP" "cd $REMOTE_DIR && tar xzf -"
+
+if [ $? -ne 0 ]; then
+    log "ERROR: transfer failed"
+    exit $EXIT_TRANSFER_FAILED
+fi
+
+log "files transferred"
+
+ssh -i "$SSH_KEY_PATH" "$SSH_USERNAME@$SERVER_IP" bash << ENDSSH
+    cd $REMOTE_DIR
+    
+    # stop old stuff
+    echo "stopping old containers..."
+    docker stop myapp 2>/dev/null || true
+    docker rm myapp 2>/dev/null || true
+    docker-compose down 2>/dev/null || true
+    
+    echo "removing old images..."
+    docker rmi myapp 2>/dev/null || true
+    
+    # cleanup old networks
+    docker network prune -f 2>/dev/null || true
+    
+    echo "building..."
+    if [ -f "docker-compose.yml" ]; then
+        docker-compose up -d --build --force-recreate
+        BUILD_STATUS=\$?
+    else
+        docker build -t myapp .
+        BUILD_STATUS=\$?
+        
+        if [ \$BUILD_STATUS -eq 0 ]; then
+            docker run -d --name myapp -p $APP_PORT:$APP_PORT --restart unless-stopped myapp
+        fi
+    fi
+    
+    if [ \$BUILD_STATUS -ne 0 ]; then
+        echo "ERROR: build failed"
+        exit 1
+    fi
+    
+    # wait for container to start
+    echo "waiting..."
+    sleep 10
+    
+    docker ps -a
+    
+    echo ""
+    echo "logs:"
+    if [ -f "docker-compose.yml" ]; then
+        docker-compose logs --tail=50
+    else
+        docker logs myapp --tail=50 2>&1 || echo "no logs"
+    fi
+ENDSSH
+
+if [ $? -ne 0 ]; then
+    log "ERROR: deployment failed"
+    exit $EXIT_DOCKER_FAILED
+fi
+
+echo ""
+
+log "setting up nginx"
+
+ssh -i "$SSH_KEY_PATH" "$SSH_USERNAME@$SERVER_IP" bash << ENDSSH
+    echo "creating nginx config..."
+    sudo tee /etc/nginx/sites-available/myapp > /dev/null << 'EOF'
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        proxy_pass http://localhost:$APP_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+    echo "enabling config..."
+    sudo ln -sf /etc/nginx/sites-available/myapp /etc/nginx/sites-enabled/myapp
+    sudo rm -f /etc/nginx/sites-enabled/default
+    
+    # test config
+    sudo nginx -t
+    
+    sudo systemctl reload nginx
+    
+    echo "nginx done"
+ENDSSH
+
+if [ $? -ne 0 ]; then
+    log "ERROR: nginx setup failed"
+    exit $EXIT_NGINX_FAILED
+fi
+
+echo ""
+
+log "validating everything"
+
+ssh -i "$SSH_KEY_PATH" "$SSH_USERNAME@$SERVER_IP" bash << ENDSSH
+    # check docker
+    echo "checking docker service..."
+    if sudo systemctl is-active --quiet docker; then
+        echo "docker running"
+    else
+        echo "ERROR: docker not running"
+        exit 1
+    fi
+    
+    echo ""
+    # check container
+    echo "checking container..."
+    CONTAINER_RUNNING=\$(docker ps --filter "name=myapp" --filter "status=running" -q)
+    
+    if [ -z "\$CONTAINER_RUNNING" ]; then
+        echo "ERROR: container not running"
+        docker ps -a
+        exit 1
+    else
+        echo "container running"
+    fi
+    
+    echo ""
+    # check nginx
+    echo "checking nginx..."
+    if sudo systemctl is-active --quiet nginx; then
+        echo "nginx running"
+    else
+        echo "ERROR: nginx not running"
+        exit 1
+    fi
+    
+    echo ""
+    # test app
+    echo "testing app..."
+    sleep 5
+    if curl -f -s http://localhost:$APP_PORT > /dev/null 2>&1; then
+        echo "app responding on port $APP_PORT"
+    else
+        echo "ERROR: app not responding"
+        sudo ss -tlnp | grep $APP_PORT || echo "port not listening"
+        exit 1
+    fi
+    
+    echo ""
+    echo "validation passed"
+ENDSSH
+
+if [ $? -ne 0 ]; then
+    log "validation failed"
+    exit $EXIT_VALIDATION_FAILED
+fi
+
+echo ""
+log "testing external access"
+sleep 3
+
+if curl -f -s "http://$SERVER_IP" > /dev/null 2>&1; then
+    log "external access works!"
+else
+    log "WARNING: external access failed"
+    log "might need to check firewall settings"
+    log "try manually: http://$SERVER_IP"
+fi
+
+echo ""
+log "DONE!"
+log "app accessible at: http://$SERVER_IP"
+log "log file: $LOG_FILE"
+echo ""
+
+exit $EXIT_SUCCESS
